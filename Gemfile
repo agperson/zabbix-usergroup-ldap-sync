@@ -1,3 +1,3 @@
 source 'https://rubygems.org' 
 
-gem 'rubix', '>=0.5'
+gem 'zabbixapi', '>=2.2'

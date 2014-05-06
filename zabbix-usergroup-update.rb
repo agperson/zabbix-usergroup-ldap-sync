@@ -1,29 +1,29 @@
 #!/usr/bin/env ruby
 
 require 'rubygems'
-require 'rubix'
+require 'zabbixapi'
 require 'ldap'
 require 'yaml'
 
-# Load Zabbix connection details from config file and connect
+# Load configuration file
 config = YAML.load_file(File.join(File.dirname(__FILE__), 'config.yaml'))
-zabbix = Rubix.connect(config['zabbix']['host'], config['zabbix']['user'], config['zabbix']['pass'])
+
+# Connect to Zabbix API endpoint
+zabbix = ZabbixApi.connect(
+  :url      => config['zabbix']['host'],
+  :user     => config['zabbix']['user'],
+  :password => config['zabbix']['pass']
+)
 
 # Connect to LDAP server
 ldap = LDAP::Conn.new(config['ldap']['host'], config['ldap']['port'])
 
 # Iterate through each group
 config['groups'].each do |group|
+  puts "Beginning update of group #{group}"
   # Find the group in Zabbix.  If it does not exist, create it.
-  response = zabbix.request('usergroup.get', 'filter' => { 'name' => group } )
-
-  if response.empty?
-    response = zabbix.request('usergroup.create', 'name' => group)
-    grpid    = response["usrgrpids"][0].to_i
-    puts "Created #{group} with ID #{grpid}."
-  else
-    grpid    = response.result[0]['usrgrpid'].to_i
-  end
+  grpid = zabbix.usergroups.get_or_create(:name => group)
+  puts "- Zabbix group ID is #{grpid}"
 
   # Determine LDAP group membership
   filter = "(&(objectclass=posixGroup)(cn=#{group}))"
@@ -59,36 +59,37 @@ config['groups'].each do |group|
   userids = []
   ldap_membership.each do |user|
     uid = user["uid"].to_s
-    response = zabbix.request('user.get', 'filter' => { 'alias' => uid } )
-    if response.empty?
-      response = zabbix.request('user.create',
-        "alias"          => uid,
-        "name"           => user["givenName"].to_s,
-        "surname"        => user["sn"].to_s,
-        "passwd"         => rand(36**12).to_s(36),
-        "url"            => "/zabbix/dashboard.php",
-        "lang"           => "en_GB",
-        "autologin"      => 0,
-        "autologout"     => 900,
-        "refresh"        => 300,
-        "rows_per_page"  => 50,
-        "theme"          => "originalblue",
-        "type"           => 1,
-        "usrgrps"        => [{ "usrgrpid" => 20 }] # Generic "Users" group
+    response = zabbix.users.get_id(:alias => uid)
+    if response.nil?
+      response = zabbix.users.create(
+        :alias          => uid,
+        :name           => user["givenName"].to_s,
+        :surname        => user["sn"].to_s,
+        :passwd         => rand(36**12).to_s(36),
+        :url            => "/zabbix/dashboard.php",
+        :lang           => "en_GB",
+        :autologin      => 0,
+        :autologout     => 900,
+        :refresh        => 300,
+        :rows_per_page  => 50,
+        :theme          => "originalblue",
+        :type           => 1,
+        :usrgrps        => [ 20 ] # Generic "Users" group
       )
-      userids << response["userids"][0].to_i
-      puts "Created user #{uid} with ID #{response["userids"][0].to_i}."
+      userids << response
+      puts "- Created user #{uid} with ID #{response}."
     else
-      userids << response[0]["userid"].to_i
+      puts "- Found existing user #{uid} with ID #{response}."
+      userids << response
     end
   end
 
-  # Mass update Zabbix group membership (Zabbix will automatically add/remove
+  # Update Zabbix group membership (Zabbix will automatically add/remove
   # users to achieve this result).
-  puts "Updating group #{group}"
-  response = zabbix.request('usergroup.massupdate',
-    "usrgrpids" => grpid,
-    "userids"   => userids
+  puts "- Updating group #{group} (#{grpid}) to match LDAP"
+  zabbix.usergroups.update_user(
+    :usrgrpids  => grpid,
+    :userids    => userids
   )
 end
 
