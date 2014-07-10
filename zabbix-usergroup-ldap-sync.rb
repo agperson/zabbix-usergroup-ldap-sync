@@ -5,21 +5,30 @@ require 'zabbixapi'
 require 'ldap'
 require 'yaml'
 
+# Cheap way of referencing a config as an object
+class ::Hash
+  def method_missing(name)
+    return self[name] if key? name
+    self.each { |k,v| return v if k.to_s.to_sym == name }
+    super.method_missing name
+  end
+end
+
 # Load configuration file
 config = YAML.load_file(File.join(File.dirname(__FILE__), 'config.yaml'))
 
 # Connect to Zabbix API endpoint
 zabbix = ZabbixApi.connect(
-  :url      => config['zabbix']['host'],
-  :user     => config['zabbix']['user'],
-  :password => config['zabbix']['pass']
+  :url      => config.zabbix.host,
+  :user     => config.zabbix.user,
+  :password => config.zabbix.pass
 )
 
 # Connect to LDAP server
-ldap = LDAP::Conn.new(config['ldap']['host'], config['ldap']['port'])
+ldap = LDAP::Conn.new(config.ldap.host, config.ldap.port)
 
 # Iterate through each group
-config['groups'].each do |group|
+config.groups.each do |group|
   puts "Beginning update of group #{group}"
   # Find the group in Zabbix.  If it does not exist, create it.
   grpid = zabbix.usergroups.get_or_create(:name => group)
@@ -31,7 +40,7 @@ config['groups'].each do |group|
   ldap_membership = []
 
   begin
-    ldap.search(config['ldap']['base'], LDAP::LDAP_SCOPE_SUBTREE, filter, attrs) do |entry|
+    ldap.search(config.ldap.base, LDAP::LDAP_SCOPE_SUBTREE, filter, attrs) do |entry|
       ldap_members = entry.vals('memberUid')
 
       # Remove DN results and keep just short username results
@@ -41,7 +50,7 @@ config['groups'].each do |group|
         filter = "(&(objectclass=posixAccount)(uid=#{user}))"
         attrs  = [ "uid", "givenName", "sn", "mail" ] 
         begin
-          ldap.search(config['ldap']['base'], LDAP::LDAP_SCOPE_SUBTREE, filter, attrs) do |entry|
+          ldap.search(config.ldap.base, LDAP::LDAP_SCOPE_SUBTREE, filter, attrs) do |entry|
             ldap_membership << entry.to_hash
           end
         rescue LDAP::ResultError
